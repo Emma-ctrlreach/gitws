@@ -158,6 +158,7 @@ When `gitws` runs inside tmux:
 - `p` toggles the current tmux integration mode between `popup`, `split`, and `window`
 - the selected tmux mode is persisted in `~/.config/gitws/config.json`
 - `s` opens a Settings panel to edit tmux options directly from the TUI
+- `s` also lets you tune layout ratios for left column, list height, and description height
 
 Environment variables:
 
@@ -180,6 +181,12 @@ Priority for tmux mode:
 1. `GITWS_TMUX_MODE`
 2. persisted value in `~/.config/gitws/config.json`
 3. default `split`
+
+Layout tuning:
+- `left col %`: width of the left column in 2-column mode
+- `list h %`: height share of the list panel in the left column
+- `desc h %`: height share of the description panel in the left column
+- diff takes the remaining height in the left column
 
 Journal path convention:
 

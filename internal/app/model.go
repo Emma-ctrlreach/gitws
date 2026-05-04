@@ -85,6 +85,9 @@ type tmuxConfig struct {
 	PopupY         string
 	SplitDirection string
 	SplitSize      string
+	LeftColumnPct  int
+	ListHeightPct  int
+	DescHeightPct  int
 }
 
 type settingsItem struct {
@@ -452,10 +455,10 @@ func renderRepoLine(repo git.RepoStatus, selected bool, width int) string {
 
 func (m model) renderContent(height int) string {
 	if m.width >= 140 {
-		leftWidth := max(42, m.width/2)
+		leftWidth := max(42, m.width*m.tmux.LeftColumnPct/100)
 		rightWidth := max(34, m.width-leftWidth-1)
-		listHeight := max(7, height/3)
-		descriptionHeight := max(6, height/3)
+		listHeight := max(7, height*m.tmux.ListHeightPct/100)
+		descriptionHeight := max(6, height*m.tmux.DescHeightPct/100)
 		diffHeight := max(6, height-listHeight-descriptionHeight)
 		descriptionPanel := m.renderDescriptionPanel(leftWidth, descriptionHeight)
 		if m.settingsOpen {
@@ -474,8 +477,8 @@ func (m model) renderContent(height int) string {
 		)
 	}
 
-	listHeight := max(5, height/4)
-	descriptionHeight := max(6, height/4)
+	listHeight := max(5, height*m.tmux.ListHeightPct/100)
+	descriptionHeight := max(6, height*m.tmux.DescHeightPct/100)
 	journalHeight := max(6, height/4)
 	diffHeight := max(6, height-listHeight-descriptionHeight-journalHeight)
 	descriptionPanel := m.renderDescriptionPanel(m.width-1, descriptionHeight)
@@ -710,10 +713,10 @@ func (m model) panelRects() map[string]panelRect {
 	height := m.contentHeight()
 	panels := map[string]panelRect{}
 	if m.width >= 140 {
-		leftWidth := max(42, m.width/2)
+		leftWidth := max(42, m.width*m.tmux.LeftColumnPct/100)
 		rightWidth := max(34, m.width-leftWidth-1)
-		listHeight := max(7, height/3)
-		descriptionHeight := max(6, height/3)
+		listHeight := max(7, height*m.tmux.ListHeightPct/100)
+		descriptionHeight := max(6, height*m.tmux.DescHeightPct/100)
 		diffHeight := max(6, height-listHeight-descriptionHeight)
 		panels["list"] = panelRect{0, top, leftWidth, listHeight}
 		leftDetail := "description"
@@ -726,8 +729,8 @@ func (m model) panelRects() map[string]panelRect {
 		return panels
 	}
 
-	listHeight := max(5, height/4)
-	descriptionHeight := max(6, height/4)
+	listHeight := max(5, height*m.tmux.ListHeightPct/100)
+	descriptionHeight := max(6, height*m.tmux.DescHeightPct/100)
 	journalHeight := max(6, height/4)
 	diffHeight := max(6, height-listHeight-descriptionHeight-journalHeight)
 	panels["list"] = panelRect{0, top, m.width - 1, listHeight}
@@ -1280,7 +1283,7 @@ func (m model) renderScrollablePanel(panelID string, title string, width int, he
 		}
 	}
 	visible = addScrollbar(visible, contentWidth, innerHeight, start, total)
-	body := append([]string{titleForPanel(title, m.focus == panelID), ""}, visible...)
+	body := append([]string{titleForPanel(title, m.focus == panelID), panelDivider(contentWidth + 2), ""}, visible...)
 	return panelForFocus(m.focus == panelID).Width(width).Height(height).Render(strings.Join(body, "\n"))
 }
 
@@ -1301,7 +1304,7 @@ func (m model) renderPrewrappedPanel(panelID string, title string, width int, he
 		visible = append(visible, mutedStyle.Render("No content"))
 	}
 	visible = addScrollbar(visible, contentWidth, innerHeight, start, len(lines))
-	body := append([]string{titleForPanel(title, m.focus == panelID), ""}, visible...)
+	body := append([]string{titleForPanel(title, m.focus == panelID), panelDivider(contentWidth + 2), ""}, visible...)
 	return panelForFocus(m.focus == panelID).Width(width).Height(height).Render(strings.Join(body, "\n"))
 }
 
@@ -1442,8 +1445,18 @@ func titleForPanel(title string, focused bool) string {
 	return titleStyle.Render(title)
 }
 
+func panelDivider(width int) string {
+	if width < 1 {
+		width = 1
+	}
+	return mutedStyle.Render(strings.Repeat("-", width))
+}
+
 func (m model) settingsItems() []settingsItem {
 	return []settingsItem{
+		{label: "left col %", value: fmt.Sprintf("%d", m.tmux.LeftColumnPct)},
+		{label: "list h %", value: fmt.Sprintf("%d", m.tmux.ListHeightPct)},
+		{label: "desc h %", value: fmt.Sprintf("%d", m.tmux.DescHeightPct)},
 		{label: "mode", value: m.tmux.Mode},
 		{label: "split dir", value: m.tmux.SplitDirection},
 		{label: "split size", value: m.tmux.SplitSize},
@@ -1485,18 +1498,24 @@ func (m *model) handleSettingsKey(key string) error {
 func (m *model) adjustSetting(delta int) {
 	switch m.settingsIndex {
 	case 0:
-		m.tmux.Mode = cycleString([]string{"split", "popup", "window"}, m.tmux.Mode, delta)
+		m.tmux.LeftColumnPct = cycleInt([]int{40, 45, 50, 55, 60, 65}, m.tmux.LeftColumnPct, delta)
 	case 1:
-		m.tmux.SplitDirection = cycleString([]string{"right", "down"}, m.tmux.SplitDirection, delta)
+		m.tmux.ListHeightPct = cycleInt([]int{25, 30, 34, 40, 45}, m.tmux.ListHeightPct, delta)
 	case 2:
-		m.tmux.SplitSize = cycleString([]string{"30%", "40%", "50%", "60%", "70%"}, m.tmux.SplitSize, delta)
+		m.tmux.DescHeightPct = cycleInt([]int{20, 25, 33, 40, 45}, m.tmux.DescHeightPct, delta)
 	case 3:
-		m.tmux.PopupWidth = cycleString([]string{"70%", "80%", "90%", "95%", "100%"}, m.tmux.PopupWidth, delta)
+		m.tmux.Mode = cycleString([]string{"split", "popup", "window"}, m.tmux.Mode, delta)
 	case 4:
-		m.tmux.PopupHeight = cycleString([]string{"70%", "80%", "90%", "95%", "100%"}, m.tmux.PopupHeight, delta)
+		m.tmux.SplitDirection = cycleString([]string{"right", "down"}, m.tmux.SplitDirection, delta)
 	case 5:
-		m.tmux.PopupX = cycleString([]string{"", "C", "0", "10", "20"}, m.tmux.PopupX, delta)
+		m.tmux.SplitSize = cycleString([]string{"30%", "40%", "50%", "60%", "70%"}, m.tmux.SplitSize, delta)
 	case 6:
+		m.tmux.PopupWidth = cycleString([]string{"70%", "80%", "90%", "95%", "100%"}, m.tmux.PopupWidth, delta)
+	case 7:
+		m.tmux.PopupHeight = cycleString([]string{"70%", "80%", "90%", "95%", "100%"}, m.tmux.PopupHeight, delta)
+	case 8:
+		m.tmux.PopupX = cycleString([]string{"", "C", "0", "10", "20"}, m.tmux.PopupX, delta)
+	case 9:
 		m.tmux.PopupY = cycleString([]string{"", "C", "0", "5", "10"}, m.tmux.PopupY, delta)
 	}
 }
@@ -1771,6 +1790,21 @@ func cycleString(options []string, current string, delta int) string {
 	return options[index]
 }
 
+func cycleInt(options []int, current int, delta int) int {
+	if len(options) == 0 {
+		return current
+	}
+	index := 0
+	for i, option := range options {
+		if option == current {
+			index = i
+			break
+		}
+	}
+	index = (index + delta + len(options)) % len(options)
+	return options[index]
+}
+
 func defaultTmuxConfig(active bool) tmuxConfig {
 	defaults := defaultPersistedConfig()
 	return tmuxConfig{
@@ -1782,6 +1816,9 @@ func defaultTmuxConfig(active bool) tmuxConfig {
 		PopupY:         defaults.PopupY,
 		SplitDirection: defaults.SplitDirection,
 		SplitSize:      defaults.SplitSize,
+		LeftColumnPct:  defaults.LeftColumnPct,
+		ListHeightPct:  defaults.ListHeightPct,
+		DescHeightPct:  defaults.DescHeightPct,
 	}
 }
 
@@ -1807,6 +1844,15 @@ func (c *tmuxConfig) applyPersisted(cfg persistedConfig) {
 	if value := strings.TrimSpace(cfg.SplitSize); value != "" {
 		c.SplitSize = value
 	}
+	if cfg.LeftColumnPct > 0 {
+		c.LeftColumnPct = cfg.LeftColumnPct
+	}
+	if cfg.ListHeightPct > 0 {
+		c.ListHeightPct = cfg.ListHeightPct
+	}
+	if cfg.DescHeightPct > 0 {
+		c.DescHeightPct = cfg.DescHeightPct
+	}
 }
 
 func (c tmuxConfig) persisted() persistedConfig {
@@ -1818,6 +1864,9 @@ func (c tmuxConfig) persisted() persistedConfig {
 		PopupY:         c.PopupY,
 		SplitDirection: c.SplitDirection,
 		SplitSize:      c.SplitSize,
+		LeftColumnPct:  c.LeftColumnPct,
+		ListHeightPct:  c.ListHeightPct,
+		DescHeightPct:  c.DescHeightPct,
 	}
 }
 

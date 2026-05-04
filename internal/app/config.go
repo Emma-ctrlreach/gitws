@@ -14,6 +14,9 @@ type persistedConfig struct {
 	PopupY         string `json:"popup_y,omitempty"`
 	SplitDirection string `json:"split_direction,omitempty"`
 	SplitSize      string `json:"split_size,omitempty"`
+	LeftColumnPct  int    `json:"left_column_pct,omitempty"`
+	ListHeightPct  int    `json:"list_height_pct,omitempty"`
+	DescHeightPct  int    `json:"description_height_pct,omitempty"`
 }
 
 func defaultPersistedConfig() persistedConfig {
@@ -25,6 +28,9 @@ func defaultPersistedConfig() persistedConfig {
 		PopupY:         "",
 		SplitDirection: "right",
 		SplitSize:      "50%",
+		LeftColumnPct:  50,
+		ListHeightPct:  34,
+		DescHeightPct:  33,
 	}
 }
 
