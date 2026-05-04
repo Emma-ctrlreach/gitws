@@ -69,6 +69,7 @@ type panelScrollState struct {
 	Description int
 	Journal     int
 	Diff        int
+	Focus       string
 }
 
 type tmuxConfig struct {
@@ -675,6 +676,7 @@ func (m *model) cycleFocus(delta int) {
 func (m *model) setSelected(index int) {
 	if len(m.filtered) == 0 {
 		m.selected = 0
+		m.focus = "list"
 		m.resetPanelScrolls()
 		return
 	}
@@ -721,6 +723,7 @@ func (m *model) saveScrollsForSelection() {
 		Description: m.descriptionScroll,
 		Journal:     m.journalScroll,
 		Diff:        m.diffScroll,
+		Focus:       m.focusForMemory(),
 	}
 }
 
@@ -732,12 +735,18 @@ func (m *model) restoreScrollsForSelection() {
 	}
 	state, ok := m.scrollMemory[path]
 	if !ok {
+		m.focus = "list"
 		m.resetPanelScrolls()
 		return
 	}
 	m.descriptionScroll = max(0, state.Description)
 	m.journalScroll = max(0, state.Journal)
 	m.diffScroll = max(0, state.Diff)
+	if m.isVisiblePanel(state.Focus) {
+		m.focus = state.Focus
+	} else {
+		m.focus = "list"
+	}
 }
 
 func (m *model) resetPanelScrolls() {
@@ -746,13 +755,33 @@ func (m *model) resetPanelScrolls() {
 	m.diffScroll = 0
 }
 
+func (m model) focusForMemory() string {
+	if m.focus == "settings" {
+		return "description"
+	}
+	if m.focus == "" {
+		return "list"
+	}
+	return m.focus
+}
+
+func (m model) isVisiblePanel(panel string) bool {
+	for _, visible := range m.visiblePanels() {
+		if visible == panel {
+			return true
+		}
+	}
+	return false
+}
+
 func (m model) renderScrollablePanel(panelID string, title string, width int, height int, lines []string, offset int) string {
 	if width < 8 {
 		width = 8
 	}
-	innerWidth := max(1, width-4)
+	innerWidth := max(3, width-4)
 	innerHeight := max(1, height-4)
-	wrapped := wrapPanelLines(lines, innerWidth)
+	contentWidth := max(1, innerWidth-2)
+	wrapped := wrapPanelLines(lines, contentWidth)
 	start := min(max(0, offset), max(0, len(wrapped)-innerHeight))
 	end := min(len(wrapped), start+innerHeight)
 	visible := make([]string, 0, end-start+2)
@@ -762,8 +791,52 @@ func (m model) renderScrollablePanel(panelID string, title string, width int, he
 	if len(visible) == 0 {
 		visible = append(visible, mutedStyle.Render("No content"))
 	}
+	visible = addScrollbar(visible, contentWidth, innerHeight, start, len(wrapped))
 	body := append([]string{titleForPanel(title, m.focus == panelID), ""}, visible...)
 	return panelForFocus(m.focus == panelID).Width(width).Height(height).Render(strings.Join(body, "\n"))
+}
+
+func addScrollbar(lines []string, contentWidth int, viewportHeight int, start int, total int) []string {
+	if viewportHeight <= 0 {
+		return lines
+	}
+	out := make([]string, 0, max(len(lines), viewportHeight))
+	thumbStart, thumbEnd := scrollbarThumb(viewportHeight, start, total)
+	for i := 0; i < viewportHeight; i++ {
+		content := ""
+		if i < len(lines) {
+			content = padRight(lines[i], contentWidth)
+		} else {
+			content = strings.Repeat(" ", contentWidth)
+		}
+		bar := mutedStyle.Render("│")
+		if i >= thumbStart && i < thumbEnd {
+			bar = titleStyle.Render("█")
+		}
+		out = append(out, content+" "+bar)
+	}
+	return out
+}
+
+func scrollbarThumb(viewportHeight int, start int, total int) (int, int) {
+	if total <= 0 || viewportHeight <= 0 {
+		return 0, 0
+	}
+	if total <= viewportHeight {
+		return 0, viewportHeight
+	}
+	thumbSize := max(1, viewportHeight*viewportHeight/total)
+	maxStart := max(1, total-viewportHeight)
+	thumbStart := (viewportHeight - thumbSize) * start / maxStart
+	return thumbStart, min(viewportHeight, thumbStart+thumbSize)
+}
+
+func padRight(s string, width int) string {
+	w := lipgloss.Width(s)
+	if w >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-w)
 }
 
 func wrapPanelLines(lines []string, width int) []string {

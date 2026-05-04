@@ -200,6 +200,8 @@ If the primary journal path does not exist, `gitws` tries fallbacks for non-feat
 - panels switch between multi-column and stacked layouts depending on terminal width
 - non-list panels use wrapped text instead of hard truncation
 - scroll offsets are remembered per selected repo for description, journal, and diff panels
+- focused panel is also remembered per selected repo
+- scrollable panels display a visual scrollbar
 - `J` shows an error if the computed journal file does not exist in the selected repo
 - the detail panel shows the journal source (`primary`, `fallback-*`, or `primary-missing`)
 - the detail panel shows the computed slug and exact resolved filename explicitly
