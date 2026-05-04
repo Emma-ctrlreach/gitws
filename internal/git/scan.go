@@ -20,7 +20,17 @@ type RepoStatus struct {
 	ModifiedCount int
 	Ahead         int
 	Behind        int
-	DiffPreview   string
+	DiffStats     string
+	DiffEntries   []DiffStatEntry
+}
+
+type DiffStatEntry struct {
+	Section  string
+	Added    string
+	Deleted  string
+	Path     string
+	OpenPath string
+	Line     int
 }
 
 func Scan(root string) ([]RepoStatus, error) {
@@ -100,7 +110,7 @@ func inspectRepo(root, repoPath string) (RepoStatus, error) {
 		}
 	}
 	status.Dirty = status.ModifiedCount > 0
-	status.DiffPreview = diffPreview(repoPath)
+	status.DiffStats, status.DiffEntries = diffStats(repoPath)
 
 	if err := scanner.Err(); err != nil {
 		return RepoStatus{}, fmt.Errorf("scan git output for %q: %w", repoPath, err)
@@ -109,21 +119,102 @@ func inspectRepo(root, repoPath string) (RepoStatus, error) {
 	return status, nil
 }
 
-func diffPreview(repoPath string) string {
+func diffStats(repoPath string) (string, []DiffStatEntry) {
 	parts := make([]string, 0, 2)
+	entries := make([]DiffStatEntry, 0, 16)
 
-	if out := runGitText(repoPath, "diff", "--no-color", "--cached"); out != "" {
+	if out := runGitText(repoPath, "diff", "--numstat", "--cached"); out != "" {
 		parts = append(parts, "staged\n"+out)
+		entries = append(entries, parseDiffStatEntries("staged", out, parseDiffLineHints(repoPath, "--cached"))...)
 	}
-	if out := runGitText(repoPath, "diff", "--no-color"); out != "" {
+	if out := runGitText(repoPath, "diff", "--numstat"); out != "" {
 		parts = append(parts, "unstaged\n"+out)
+		entries = append(entries, parseDiffStatEntries("unstaged", out, parseDiffLineHints(repoPath))...)
 	}
 
 	if len(parts) == 0 {
-		return "No patch preview available; working tree may be clean or contain only untracked files"
+		return "No diff stats available; working tree may be clean or contain only untracked files", nil
 	}
 
-	return strings.Join(parts, "\n\n")
+	return strings.Join(parts, "\n\n"), entries
+}
+
+func parseDiffStatEntries(section string, text string, lineHints map[string]int) []DiffStatEntry {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	entries := make([]DiffStatEntry, 0, len(lines))
+	for _, line := range lines {
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		entries = append(entries, DiffStatEntry{
+			Section:  section,
+			Added:    parts[0],
+			Deleted:  parts[1],
+			Path:     parts[2],
+			OpenPath: resolveDiffOpenPath(parts[2]),
+			Line:     lineHints[parts[2]],
+		})
+	}
+	return entries
+}
+
+func resolveDiffOpenPath(path string) string {
+	if strings.Contains(path, " => ") {
+		left, right, found := strings.Cut(path, " => ")
+		if !found {
+			return path
+		}
+		leftBrace := strings.LastIndex(left, "{")
+		rightBrace := strings.Index(right, "}")
+		if leftBrace >= 0 && rightBrace >= 0 {
+			prefix := left[:leftBrace]
+			suffix := right[rightBrace+1:]
+			middle := right[:rightBrace]
+			return prefix + middle + suffix
+		}
+		return right
+	}
+	return path
+}
+
+func parseDiffLineHints(repoPath string, args ...string) map[string]int {
+	cmdArgs := append([]string{"diff", "--no-color", "--unified=0"}, args...)
+	out := runGitText(repoPath, cmdArgs...)
+	hints := map[string]int{}
+	if out == "" {
+		return hints
+	}
+	currentPath := ""
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "+++ b/"):
+			currentPath = strings.TrimPrefix(line, "+++ b/")
+		case strings.HasPrefix(line, "+++ "):
+			currentPath = strings.TrimPrefix(line, "+++ ")
+		case strings.HasPrefix(line, "@@") && currentPath != "":
+			if _, exists := hints[currentPath]; exists {
+				continue
+			}
+			var oldStart, oldCount, newStart, newCount int
+			if _, err := fmt.Sscanf(line, "@@ -%d,%d +%d,%d @@", &oldStart, &oldCount, &newStart, &newCount); err == nil {
+				if newStart > 0 {
+					hints[currentPath] = newStart
+				} else if oldStart > 0 {
+					hints[currentPath] = oldStart
+				}
+				continue
+			}
+			if _, err := fmt.Sscanf(line, "@@ -%d +%d @@", &oldStart, &newStart); err == nil {
+				if newStart > 0 {
+					hints[currentPath] = newStart
+				} else if oldStart > 0 {
+					hints[currentPath] = oldStart
+				}
+			}
+		}
+	}
+	return hints
 }
 
 func runGitText(repoPath string, args ...string) string {

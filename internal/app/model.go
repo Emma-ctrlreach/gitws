@@ -1,18 +1,18 @@
 package app
 
 import (
-	"bufio"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/emma/gitws/internal/git"
@@ -58,6 +58,10 @@ type model struct {
 	descriptionScroll int
 	journalScroll     int
 	diffScroll        int
+	dragPanel         string
+	lastListClickAt   time.Time
+	lastListClickPath string
+	hoverHint         string
 	loading           bool
 	dirtyOnly         bool
 	filtering         bool
@@ -94,6 +98,21 @@ type journalResolution struct {
 	ResolvedSlug string
 	FileName     string
 	Source       string
+}
+
+type panelRect struct {
+	x      int
+	y      int
+	width  int
+	height int
+}
+
+type panelContentInfo struct {
+	Lines          []string
+	Wrapped        []string
+	ContentWidth   int
+	ViewportHeight int
+	Offset         int
 }
 
 func NewModel(root string, warnings []string, tmux tmuxConfig) model {
@@ -182,6 +201,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case externalCommandFinishedMsg:
 		m.err = msg.err
 		return m, nil
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
@@ -395,6 +416,9 @@ func (m model) statusLine() string {
 	if len(m.filtered) != len(m.repos) {
 		parts = append(parts, fmt.Sprintf("%d shown", len(m.filtered)))
 	}
+	if strings.TrimSpace(m.hoverHint) != "" {
+		parts = append(parts, mutedStyle.Render(m.hoverHint))
+	}
 	return strings.Join(parts, "  ")
 }
 
@@ -427,49 +451,37 @@ func renderRepoLine(repo git.RepoStatus, selected bool, width int) string {
 }
 
 func (m model) renderContent(height int) string {
-	if m.width >= 190 {
-		listWidth := max(34, m.width/4)
-		descriptionWidth := max(26, (m.width-listWidth)/3)
-		journalWidth := max(26, (m.width-listWidth-descriptionWidth)/2)
-		diffWidth := max(26, m.width-listWidth-descriptionWidth-journalWidth-3)
-		descriptionPanel := m.renderDescriptionPanel(descriptionWidth, height)
+	if m.width >= 140 {
+		leftWidth := max(42, m.width/2)
+		rightWidth := max(34, m.width-leftWidth-1)
+		listHeight := max(7, height/2)
+		descriptionHeight := max(6, height-listHeight)
+		journalHeight := max(7, height/2)
+		diffHeight := max(6, height-journalHeight)
+		descriptionPanel := m.renderDescriptionPanel(leftWidth, descriptionHeight)
 		if m.settingsOpen {
-			descriptionPanel = m.renderSettingsPanel(descriptionWidth, height)
+			descriptionPanel = m.renderSettingsPanel(leftWidth, descriptionHeight)
 		}
-		return lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			m.renderListPanel(listWidth, height),
+		leftColumn := lipgloss.JoinVertical(
+			lipgloss.Left,
+			m.renderListPanel(leftWidth, listHeight),
 			descriptionPanel,
-			m.renderJournalPanel(journalWidth, height),
-			m.renderDiffPanel(diffWidth, height),
 		)
-	}
-	if m.width >= 120 {
-		listWidth := max(34, m.width/3)
-		rightWidth := max(30, m.width-listWidth-1)
-		descriptionHeight := max(6, height/3)
-		journalHeight := max(6, (height-descriptionHeight)/2)
-		diffHeight := max(6, height-descriptionHeight-journalHeight)
-		descriptionPanel := m.renderDescriptionPanel(rightWidth, descriptionHeight)
-		if m.settingsOpen {
-			descriptionPanel = m.renderSettingsPanel(rightWidth, descriptionHeight)
-		}
 		rightColumn := lipgloss.JoinVertical(
 			lipgloss.Left,
-			descriptionPanel,
 			m.renderJournalPanel(rightWidth, journalHeight),
 			m.renderDiffPanel(rightWidth, diffHeight),
 		)
 		return lipgloss.JoinHorizontal(
 			lipgloss.Top,
-			m.renderListPanel(listWidth, height),
+			leftColumn,
 			rightColumn,
 		)
 	}
 
-	listHeight := max(5, height/3)
-	descriptionHeight := max(6, (height-listHeight)/3)
-	journalHeight := max(6, (height-listHeight-descriptionHeight)/2)
+	listHeight := max(5, height/4)
+	descriptionHeight := max(6, height/4)
+	journalHeight := max(6, height/4)
 	diffHeight := max(6, height-listHeight-descriptionHeight-journalHeight)
 	descriptionPanel := m.renderDescriptionPanel(m.width-1, descriptionHeight)
 	if m.settingsOpen {
@@ -513,74 +525,20 @@ func (m model) renderDescriptionPanel(width, height int) string {
 	if width < 8 {
 		width = 8
 	}
-	repo := m.selectedRepo()
-	if repo == nil {
+	if m.selectedRepo() == nil {
 		return panelStyle.Width(width).Height(height).Render(mutedStyle.Render("No selection"))
 	}
-
-	stateText := "clean"
-	if repo.Dirty {
-		stateText = fmt.Sprintf("dirty (%d files)", repo.ModifiedCount)
-	}
-
-	journal := resolveJournalPathForRepo(*repo)
-	journalState := "missing"
-	journalSource := journal.Source
-	if _, err := os.Stat(journal.Path); err == nil {
-		journalState = "present"
-	}
-
-	lines := []string{
-		repo.Name,
-		fmt.Sprintf("Branch: %s", repo.Branch),
-		fmt.Sprintf("Status: %s", stateText),
-		fmt.Sprintf("Ahead/Behind: +%d/-%d", repo.Ahead, repo.Behind),
-		fmt.Sprintf("Path: %s", repo.Path),
-		fmt.Sprintf("Relative: %s", repo.RelPath),
-		fmt.Sprintf("Journal: %s", journalState),
-		fmt.Sprintf("Journal source: %s", journalSource),
-		fmt.Sprintf("Journal slug: %s", journal.ComputedSlug),
-		fmt.Sprintf("Resolved slug: %s", journal.ResolvedSlug),
-		fmt.Sprintf("Journal file: %s", journal.FileName),
-		fmt.Sprintf("Journal path: %s", journal.Path),
-		"",
-		"Actions",
-		"enter/l  open lazygit",
-		"o        open opencode",
-		"J        open resolved feature journal",
-		"p        cycle tmux mode",
-	}
-	return m.renderScrollablePanel("description", "Description", width, height, lines, m.descriptionScroll)
+	return m.renderScrollablePanel("description", "Description", width, height, m.descriptionLines(), m.descriptionScroll)
 }
 
 func (m model) renderJournalPanel(width, height int) string {
 	if width < 8 {
 		width = 8
 	}
-	repo := m.selectedRepo()
-	if repo == nil {
+	if m.selectedRepo() == nil {
 		return panelStyle.Width(width).Height(height).Render(mutedStyle.Render("No selection"))
 	}
-
-	journal := resolveJournalPathForRepo(*repo)
-	journalState := "missing"
-	journalPreview := mutedStyle.Render("Journal preview unavailable")
-	journalSource := journal.Source
-	if _, err := os.Stat(journal.Path); err == nil {
-		journalState = "present"
-		journalPreview = readJournalPreview(journal.Path, max(8, height-10), max(20, width-6))
-	}
-
-	lines := []string{
-		fmt.Sprintf("State: %s", journalState),
-		fmt.Sprintf("Source: %s", journalSource),
-		fmt.Sprintf("Slug: %s", journal.ComputedSlug),
-		fmt.Sprintf("Resolved: %s", journal.ResolvedSlug),
-		fmt.Sprintf("File: %s", journal.FileName),
-		"",
-		journalPreview,
-	}
-	return m.renderScrollablePanel("journal", "Journal", width, height, lines, m.journalScroll)
+	return m.renderPrewrappedPanel("journal", "Journal", width, height, m.journalLines(), m.journalScroll)
 }
 
 func (m model) renderDiffPanel(width int, height int) string {
@@ -591,11 +549,51 @@ func (m model) renderDiffPanel(width int, height int) string {
 	if repo == nil {
 		return panelForFocus(m.focus == "diff").Width(width).Height(height).Render(strings.Join([]string{titleForPanel("diff", m.focus == "diff"), "", mutedStyle.Render("No selection")}, "\n"))
 	}
-	lines := strings.Split(repo.DiffPreview, "\n")
+	lines := diffStatLines(*repo)
 	if len(lines) == 0 {
-		lines = []string{mutedStyle.Render("No diff preview available")}
+		lines = []string{"No diff stats available"}
 	}
-	return m.renderScrollablePanel("diff", "Diff", width, height, lines, m.diffScroll)
+	return m.renderScrollablePanel("diff", "Diff Stats", width, height, lines, m.diffScroll)
+}
+
+func diffStatLines(repo git.RepoStatus) []string {
+	if len(repo.DiffEntries) == 0 {
+		if strings.TrimSpace(repo.DiffStats) == "" {
+			return []string{"No diff stats available"}
+		}
+		return strings.Split(repo.DiffStats, "\n")
+	}
+
+	lines := make([]string, 0, len(repo.DiffEntries)+4)
+	section := ""
+	for _, entry := range repo.DiffEntries {
+		if entry.Section != section {
+			if section != "" {
+				lines = append(lines, "")
+			}
+			section = entry.Section
+			lines = append(lines, strings.ToUpper(section))
+		}
+		lineHint := ""
+		if entry.Line > 0 {
+			lineHint = fmt.Sprintf(":%d", entry.Line)
+		}
+		lines = append(lines, fmt.Sprintf("+%s -%s  %s%s", entry.Added, entry.Deleted, entry.Path, lineHint))
+	}
+	return lines
+}
+
+func colorizeDiffStatLine(line string) string {
+	switch {
+	case line == "STAGED" || line == "UNSTAGED":
+		return titleStyle.Render(line)
+	case strings.HasPrefix(line, "+"):
+		return cleanStyle.Render(line)
+	case strings.HasPrefix(line, "No diff stats available"):
+		return mutedStyle.Render(line)
+	default:
+		return line
+	}
 }
 
 func (m model) renderSettingsPanel(width int, height int) string {
@@ -690,6 +688,378 @@ func (m model) visiblePanels() []string {
 	return panels
 }
 
+func (m model) contentTopOffset() int {
+	lines := 3
+	if len(m.warnings) > 0 {
+		lines += len(m.warnings) + 1
+	}
+	if m.filtering || strings.TrimSpace(m.filter.Value()) != "" {
+		lines += 2
+	}
+	if m.err != nil {
+		lines += 2
+	}
+	return lines
+}
+
+func (m model) contentHeight() int {
+	height := m.height - m.contentTopOffset() - 2
+	if height < 6 {
+		return 6
+	}
+	return height
+}
+
+func (m model) panelRects() map[string]panelRect {
+	top := m.contentTopOffset()
+	height := m.contentHeight()
+	panels := map[string]panelRect{}
+	if m.width >= 140 {
+		leftWidth := max(42, m.width/2)
+		rightWidth := max(34, m.width-leftWidth-1)
+		listHeight := max(7, height/2)
+		descriptionHeight := max(6, height-listHeight)
+		journalHeight := max(7, height/2)
+		diffHeight := max(6, height-journalHeight)
+		panels["list"] = panelRect{0, top, leftWidth, listHeight}
+		leftDetail := "description"
+		if m.settingsOpen {
+			leftDetail = "settings"
+		}
+		panels[leftDetail] = panelRect{0, top + listHeight, leftWidth, descriptionHeight}
+		panels["journal"] = panelRect{leftWidth, top, rightWidth, journalHeight}
+		panels["diff"] = panelRect{leftWidth, top + journalHeight, rightWidth, diffHeight}
+		return panels
+	}
+
+	listHeight := max(5, height/4)
+	descriptionHeight := max(6, height/4)
+	journalHeight := max(6, height/4)
+	diffHeight := max(6, height-listHeight-descriptionHeight-journalHeight)
+	panels["list"] = panelRect{0, top, m.width - 1, listHeight}
+	stackDetail := "description"
+	if m.settingsOpen {
+		stackDetail = "settings"
+	}
+	panels[stackDetail] = panelRect{0, top + listHeight, m.width - 1, descriptionHeight}
+	panels["journal"] = panelRect{0, top + listHeight + descriptionHeight, m.width - 1, journalHeight}
+	panels["diff"] = panelRect{0, top + listHeight + descriptionHeight + journalHeight, m.width - 1, diffHeight}
+	return panels
+}
+
+func (m model) listWindowHeight(height int) (int, int, int) {
+	innerHeight := max(1, height-4)
+	start := 0
+	if m.selected >= innerHeight {
+		start = m.selected - innerHeight + 1
+	}
+	end := min(len(m.filtered), start+innerHeight)
+	return innerHeight, start, end
+}
+
+func (m model) panelAt(x int, y int) string {
+	for _, panel := range []string{"list", "description", "settings", "journal", "diff"} {
+		rect, ok := m.panelRects()[panel]
+		if !ok {
+			continue
+		}
+		if x >= rect.x && x < rect.x+rect.width && y >= rect.y && y < rect.y+rect.height {
+			return panel
+		}
+	}
+	return ""
+}
+
+func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	panel := m.panelAt(msg.X, msg.Y)
+	if msg.Action == tea.MouseActionMotion && m.dragPanel != "" {
+		m.scrollPanelToMouse(m.dragPanel, msg.Y)
+		return m, nil
+	}
+	if msg.Action == tea.MouseActionMotion {
+		m.hoverHint = m.mouseHint(panel, msg.X, msg.Y)
+		return m, nil
+	}
+	if msg.Action == tea.MouseActionRelease {
+		m.dragPanel = ""
+		return m, nil
+	}
+	if panel == "" {
+		return m, nil
+	}
+	if msg.Action == tea.MouseActionPress {
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.focus = panel
+			m.scrollPanel(panel, -3)
+			return m, nil
+		case tea.MouseButtonWheelDown:
+			m.focus = panel
+			m.scrollPanel(panel, 3)
+			return m, nil
+		case tea.MouseButtonLeft:
+			m.focus = panel
+			if m.isScrollbarHit(panel, msg.X) {
+				m.dragPanel = panel
+				m.scrollPanelToMouse(panel, msg.Y)
+				return m, nil
+			}
+			if panel == "list" {
+				return m.handleListClick(msg.X, msg.Y)
+			}
+			if panel == "settings" {
+				m.handleSettingsClick(msg.Y, 1)
+				return m, nil
+			}
+			if panel == "diff" {
+				return m.handleDiffClick(msg.X, msg.Y)
+			}
+			return m, nil
+		case tea.MouseButtonRight:
+			m.focus = panel
+			if panel == "settings" {
+				m.handleSettingsClick(msg.Y, -1)
+			}
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+func (m model) handleListClick(x int, y int) (tea.Model, tea.Cmd) {
+	path, ok := m.selectRepoFromMouse(x, y)
+	if !ok {
+		return m, nil
+	}
+	if path != "" && path == m.lastListClickPath && time.Since(m.lastListClickAt) <= 400*time.Millisecond {
+		cmd, err := openLazygitCmd(path, m.tmux)
+		if err != nil {
+			m.err = err
+			return m, nil
+		}
+		m.lastListClickAt = time.Time{}
+		m.lastListClickPath = ""
+		return m, runExternalCmd(cmd)
+	}
+	m.lastListClickAt = time.Now()
+	m.lastListClickPath = path
+	return m, nil
+}
+
+func (m model) handleDiffClick(x int, y int) (tea.Model, tea.Cmd) {
+	repo := m.selectedRepo()
+	if repo == nil {
+		return m, nil
+	}
+	entry, ok := m.diffEntryAt(*repo, x, y)
+	if !ok {
+		return m, nil
+	}
+	if entry.OpenPath == "" {
+		m.err = fmt.Errorf("cannot open deleted or unresolved file: %s", entry.Path)
+		return m, nil
+	}
+	fullPath := filepath.Join(repo.Path, entry.OpenPath)
+	if _, err := os.Stat(fullPath); err != nil {
+		m.err = fmt.Errorf("file not available in working tree: %s", entry.OpenPath)
+		return m, nil
+	}
+	cmd, err := openFileInEditorCmd(repo.Path, entry.OpenPath, entry.Line, m.tmux)
+	if err != nil {
+		m.err = err
+		return m, nil
+	}
+	return m, runExternalCmd(cmd)
+}
+
+func (m *model) selectRepoFromMouse(x int, y int) (string, bool) {
+	rect, ok := m.panelRects()["list"]
+	if !ok {
+		return "", false
+	}
+	_, start, end := m.listWindowHeight(rect.height)
+	row := y - rect.y - 3
+	if row < 0 {
+		return "", false
+	}
+	index := start + row
+	if index >= start && index < end {
+		path := m.filtered[index].Path
+		m.setSelected(index)
+		return path, true
+	}
+	return "", false
+}
+
+func (m *model) scrollPanel(panel string, delta int) {
+	switch panel {
+	case "description", "settings":
+		m.descriptionScroll = max(0, m.descriptionScroll+delta)
+	case "journal":
+		m.journalScroll = max(0, m.journalScroll+delta)
+	case "diff":
+		m.diffScroll = max(0, m.diffScroll+delta)
+	}
+}
+
+func (m model) mouseHint(panel string, x int, y int) string {
+	if panel == "diff" {
+		repo := m.selectedRepo()
+		if repo == nil {
+			return ""
+		}
+		entry, ok := m.diffEntryAt(*repo, x, y)
+		if !ok {
+			return ""
+		}
+		if entry.OpenPath == "" {
+			return fmt.Sprintf("deleted/unresolved: %s", entry.Path)
+		}
+		if entry.Line > 0 {
+			return fmt.Sprintf("click to open %s:%d", entry.OpenPath, entry.Line)
+		}
+		return fmt.Sprintf("click to open %s", entry.OpenPath)
+	}
+	if panel == "list" {
+		return "double-click to open lazygit"
+	}
+	if panel == "settings" {
+		return "left/right click to change setting"
+	}
+	return ""
+}
+
+func (m model) diffEntryAt(repo git.RepoStatus, x int, y int) (git.DiffStatEntry, bool) {
+	rect, ok := m.panelRects()["diff"]
+	if !ok {
+		return git.DiffStatEntry{}, false
+	}
+	row := y - rect.y - 2
+	if row < 0 {
+		return git.DiffStatEntry{}, false
+	}
+	lines := diffStatLines(repo)
+	_, _, innerHeight, start, _ := scrollWindow(lines, rect.width, rect.height, m.diffScroll)
+	if row >= innerHeight {
+		return git.DiffStatEntry{}, false
+	}
+	absolute := start + row
+	entryIndex := -1
+	for _, line := range lines[:min(len(lines), absolute+1)] {
+		if line == "" || line == "STAGED" || line == "UNSTAGED" || strings.HasPrefix(line, "No diff stats available") {
+			continue
+		}
+		entryIndex++
+	}
+	if entryIndex < 0 || entryIndex >= len(repo.DiffEntries) {
+		return git.DiffStatEntry{}, false
+	}
+	return repo.DiffEntries[entryIndex], true
+}
+
+func openFileInEditorCmd(repoPath string, relativePath string, line int, tmux tmuxConfig) (*exec.Cmd, error) {
+	editor := strings.TrimSpace(os.Getenv("EDITOR"))
+	if editor == "" {
+		editor = "vi"
+	}
+	cmdLine := editorCommand(editor, relativePath, line)
+	if tmux.usable() {
+		return tmux.command(repoPath, cmdLine)
+	}
+	args := editorArgs(editor, filepath.Join(repoPath, relativePath), line)
+	cmd := exec.Command(editor, args...)
+	return cmd, nil
+}
+
+func editorArgs(editor string, path string, line int) []string {
+	name := filepath.Base(editor)
+	switch name {
+	case "vim", "nvim", "vi", "nano", "less":
+		if line > 0 {
+			return []string{fmt.Sprintf("+%d", line), path}
+		}
+		return []string{path}
+	case "code", "cursor", "codium":
+		if line > 0 {
+			return []string{"--goto", fmt.Sprintf("%s:%d", path, line)}
+		}
+		return []string{path}
+	case "subl", "mate", "zed":
+		if line > 0 {
+			return []string{fmt.Sprintf("%s:%d", path, line)}
+		}
+		return []string{path}
+	default:
+		return []string{path}
+	}
+}
+
+func editorCommand(editor string, relativePath string, line int) string {
+	args := editorArgs(editor, relativePath, line)
+	quoted := make([]string, 0, len(args)+1)
+	quoted = append(quoted, shellQuote(editor))
+	for _, arg := range args {
+		quoted = append(quoted, shellQuote(arg))
+	}
+	return "exec " + strings.Join(quoted, " ")
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func (m *model) handleSettingsClick(y int, delta int) {
+	rect, ok := m.panelRects()["settings"]
+	if !ok {
+		return
+	}
+	row := y - rect.y - 2
+	if row < 0 || row >= len(m.settingsItems()) {
+		return
+	}
+	m.settingsIndex = row
+	m.adjustSetting(delta)
+	if err := m.persistTmuxConfig(); err != nil {
+		m.err = fmt.Errorf("persist tmux mode: %w", err)
+	}
+}
+
+func (m *model) scrollPanelToMouse(panel string, y int) {
+	rect, ok := m.panelRects()[panel]
+	if !ok {
+		return
+	}
+	info := m.panelContentInfo(panel, rect.width, rect.height)
+	if info.ViewportHeight <= 0 || len(info.Wrapped) <= info.ViewportHeight {
+		return
+	}
+	row := max(0, min(y-rect.y-2, info.ViewportHeight-1))
+	maxStart := max(0, len(info.Wrapped)-info.ViewportHeight)
+	target := 0
+	if info.ViewportHeight > 1 {
+		target = maxStart * row / (info.ViewportHeight - 1)
+	}
+	switch panel {
+	case "description", "settings":
+		m.descriptionScroll = target
+	case "journal":
+		m.journalScroll = target
+	case "diff":
+		m.diffScroll = target
+	}
+	if panel != "settings" {
+		m.saveScrollsForSelection()
+	}
+}
+
+func (m model) isScrollbarHit(panel string, x int) bool {
+	rect, ok := m.panelRects()[panel]
+	if !ok {
+		return false
+	}
+	return x == rect.x+rect.width-2
+}
+
 func (m *model) scrollFocused(delta int) {
 	if delta == 0 {
 		return
@@ -715,6 +1085,99 @@ func (m *model) saveScrollsForSelection() {
 		Diff:        m.diffScroll,
 		Focus:       m.focusForMemory(),
 	}
+}
+
+func (m model) panelContentInfo(panel string, width int, height int) panelContentInfo {
+	if width < 8 {
+		width = 8
+	}
+	innerWidth := max(3, width-4)
+	innerHeight := max(1, height-4)
+	contentWidth := max(1, innerWidth-2)
+	var lines []string
+	var offset int
+	switch panel {
+	case "description", "settings":
+		lines = m.descriptionLines()
+		offset = m.descriptionScroll
+	case "journal":
+		lines = m.journalLines()
+		offset = m.journalScroll
+	case "diff":
+		lines = m.diffLines()
+		offset = m.diffScroll
+	default:
+		lines = nil
+	}
+	wrapped := wrapPanelLines(lines, contentWidth)
+	return panelContentInfo{Lines: lines, Wrapped: wrapped, ContentWidth: contentWidth, ViewportHeight: innerHeight, Offset: offset}
+}
+
+func (m model) descriptionLines() []string {
+	repo := m.selectedRepo()
+	if repo == nil {
+		return []string{"No selection"}
+	}
+	stateText := "clean"
+	if repo.Dirty {
+		stateText = fmt.Sprintf("dirty (%d files)", repo.ModifiedCount)
+	}
+	journal := resolveJournalPathForRepo(*repo)
+	journalState := "missing"
+	if _, err := os.Stat(journal.Path); err == nil {
+		journalState = "present"
+	}
+	return []string{
+		repo.Name,
+		fmt.Sprintf("Branch: %s", repo.Branch),
+		fmt.Sprintf("Status: %s", stateText),
+		fmt.Sprintf("Ahead/Behind: +%d/-%d", repo.Ahead, repo.Behind),
+		fmt.Sprintf("Path: %s", repo.Path),
+		fmt.Sprintf("Relative: %s", repo.RelPath),
+		fmt.Sprintf("Journal: %s", journalState),
+		fmt.Sprintf("Journal source: %s", journal.Source),
+		fmt.Sprintf("Journal slug: %s", journal.ComputedSlug),
+		fmt.Sprintf("Resolved slug: %s", journal.ResolvedSlug),
+		fmt.Sprintf("Journal file: %s", journal.FileName),
+		fmt.Sprintf("Journal path: %s", journal.Path),
+		"",
+		"Actions",
+		"enter/l  open lazygit",
+		"o        open opencode",
+		"J        open resolved feature journal",
+		"p        cycle tmux mode",
+	}
+}
+
+func (m model) journalLines() []string {
+	repo := m.selectedRepo()
+	if repo == nil {
+		return []string{"No selection"}
+	}
+	journal := resolveJournalPathForRepo(*repo)
+	journalState := "missing"
+	journalLines := []string{mutedStyle.Render("Journal preview unavailable")}
+	if _, err := os.Stat(journal.Path); err == nil {
+		journalState = "present"
+		journalLines = renderJournalMarkdown(journal.Path, max(20, m.width/3))
+	}
+	lines := []string{
+		fmt.Sprintf("State: %s", journalState),
+		fmt.Sprintf("Source: %s", journal.Source),
+		fmt.Sprintf("Slug: %s", journal.ComputedSlug),
+		fmt.Sprintf("Resolved: %s", journal.ResolvedSlug),
+		fmt.Sprintf("File: %s", journal.FileName),
+		"",
+	}
+	return append(lines, journalLines...)
+}
+
+func (m model) diffLines() []string {
+	repo := m.selectedRepo()
+	if repo == nil {
+		return []string{"No selection"}
+	}
+	return diffStatLines(*repo)
 }
 
 func (m *model) restoreScrollsForSelection() {
@@ -765,6 +1228,39 @@ func (m model) isVisiblePanel(panel string) bool {
 }
 
 func (m model) renderScrollablePanel(panelID string, title string, width int, height int, lines []string, offset int) string {
+	visible, contentWidth, innerHeight, start, total := scrollWindow(lines, width, height, offset)
+	if panelID == "diff" {
+		for i, line := range visible {
+			visible[i] = colorizeDiffStatLine(line)
+		}
+	}
+	visible = addScrollbar(visible, contentWidth, innerHeight, start, total)
+	body := append([]string{titleForPanel(title, m.focus == panelID), ""}, visible...)
+	return panelForFocus(m.focus == panelID).Width(width).Height(height).Render(strings.Join(body, "\n"))
+}
+
+func (m model) renderPrewrappedPanel(panelID string, title string, width int, height int, lines []string, offset int) string {
+	if width < 8 {
+		width = 8
+	}
+	innerWidth := max(3, width-4)
+	innerHeight := max(1, height-4)
+	contentWidth := max(1, innerWidth-2)
+	start := min(max(0, offset), max(0, len(lines)-innerHeight))
+	end := min(len(lines), start+innerHeight)
+	visible := make([]string, 0, end-start+2)
+	for _, line := range lines[start:end] {
+		visible = append(visible, line)
+	}
+	if len(visible) == 0 {
+		visible = append(visible, mutedStyle.Render("No content"))
+	}
+	visible = addScrollbar(visible, contentWidth, innerHeight, start, len(lines))
+	body := append([]string{titleForPanel(title, m.focus == panelID), ""}, visible...)
+	return panelForFocus(m.focus == panelID).Width(width).Height(height).Render(strings.Join(body, "\n"))
+}
+
+func scrollWindow(lines []string, width int, height int, offset int) ([]string, int, int, int, int) {
 	if width < 8 {
 		width = 8
 	}
@@ -781,9 +1277,7 @@ func (m model) renderScrollablePanel(panelID string, title string, width int, he
 	if len(visible) == 0 {
 		visible = append(visible, mutedStyle.Render("No content"))
 	}
-	visible = addScrollbar(visible, contentWidth, innerHeight, start, len(wrapped))
-	body := append([]string{titleForPanel(title, m.focus == panelID), ""}, visible...)
-	return panelForFocus(m.focus == panelID).Width(width).Height(height).Render(strings.Join(body, "\n"))
+	return visible, contentWidth, innerHeight, start, len(wrapped)
 }
 
 func addScrollbar(lines []string, contentWidth int, viewportHeight int, start int, total int) []string {
@@ -835,10 +1329,29 @@ func wrapPanelLines(lines []string, width int) []string {
 	}
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
-		wrapped := wrapLine(line, width)
-		out = append(out, wrapped...)
+		for _, physicalLine := range strings.Split(line, "\n") {
+			wrapped := wrapLine(physicalLine, width)
+			out = append(out, wrapped...)
+		}
 	}
 	return out
+}
+
+func colorizeDiffLine(line string) string {
+	switch {
+	case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
+		return branchStyle.Render(line)
+	case strings.HasPrefix(line, "+"):
+		return cleanStyle.Render(line)
+	case strings.HasPrefix(line, "-"):
+		return errorStyle.Render(line)
+	case strings.HasPrefix(line, "@@"):
+		return labelStyle.Render(line)
+	case strings.HasPrefix(line, "diff ") || strings.HasPrefix(line, "index "):
+		return mutedStyle.Render(line)
+	default:
+		return line
+	}
 }
 
 func wrapLine(line string, width int) []string {
@@ -1334,66 +1847,46 @@ func lastBranchSegmentSlug(branch string) string {
 	return normalizeJournalSlug(parts[len(parts)-1])
 }
 
-func readJournalPreview(path string, maxLines int, maxWidth int) string {
-	f, err := os.Open(path)
+func readJournalContent(path string) []string {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return errorStyle.Render(err.Error())
+		return []string{errorStyle.Render(err.Error())}
 	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(io.LimitReader(f, 32*1024))
-	lines := make([]string, 0, maxLines)
-	for scanner.Scan() {
-		line := strings.TrimRight(scanner.Text(), " \t")
-		if maxWidth > 0 {
-			line = truncateRight(line, maxWidth)
-		}
-		lines = append(lines, line)
-		if len(lines) >= maxLines {
-			break
-		}
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	text = strings.TrimRight(text, "\n")
+	if text == "" {
+		return []string{mutedStyle.Render("Journal empty")}
 	}
-	if err := scanner.Err(); err != nil {
-		return errorStyle.Render(err.Error())
-	}
-	if len(lines) == 0 {
-		return mutedStyle.Render("Journal empty")
-	}
-
-	return joinPreviewLines(lines, maxLines)
+	return strings.Split(text, "\n")
 }
 
-func truncateBlock(text string, maxLines int, maxWidth int) string {
+func renderJournalMarkdown(path string, width int) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return []string{errorStyle.Render(err.Error())}
+	}
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
 	if strings.TrimSpace(text) == "" {
-		return mutedStyle.Render("No diff preview available")
+		return []string{mutedStyle.Render("Journal empty")}
 	}
 
-	rawLines := strings.Split(text, "\n")
-	lines := make([]string, 0, min(len(rawLines), maxLines))
-	for _, line := range rawLines {
-		line = strings.TrimRight(line, " \t")
-		if maxWidth > 0 {
-			line = truncateRight(line, maxWidth)
-		}
-		lines = append(lines, line)
-		if len(lines) >= maxLines {
-			break
-		}
-	}
-	if len(lines) == 0 {
-		return mutedStyle.Render("No diff preview available")
+	renderer, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		return readJournalContent(path)
 	}
 
-	return joinPreviewLines(lines, maxLines)
-}
-
-func joinPreviewLines(lines []string, maxLines int) string {
-
-	preview := strings.Join(lines, "\n")
-	if len(lines) >= maxLines {
-		preview += "\n" + mutedStyle.Render("...")
+	rendered, err := renderer.Render(text)
+	if err != nil {
+		return readJournalContent(path)
 	}
-	return preview
+	rendered = strings.TrimRight(rendered, "\n")
+	if rendered == "" {
+		return []string{mutedStyle.Render("Journal empty")}
+	}
+	return strings.Split(rendered, "\n")
 }
 
 func truncateRight(s string, width int) string {

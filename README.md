@@ -14,9 +14,11 @@
 - open `lazygit` with `enter` or `l`
 - open `opencode` with `o`
 - show a detail panel for the selected repo
-- show a 4-panel layout: list, description, journal, diff
+- show a 2-column layout: left column `list > description`, right column `journal > diff`
 - preview code diff in the detail panel
 - preview `.claude/features/JOURNAL_<slug>.md` in the detail panel
+- render the journal panel as an enriched markdown preview
+- show only diff stats in the diff panel (files and line counts)
 - open `.claude/features/JOURNAL_<slug>.md` with `J`
 - uses globally installed `lazygit` and `opencode` from `PATH`
 - can be used globally from any current working directory
@@ -135,6 +137,16 @@ make install
 - `r`: refresh repositories
 - `q`: quit
 
+Mouse:
+- left click: focus a panel
+- left click in repo list: select repo
+- double-click in repo list: open `lazygit`
+- left click on a diff stats line: open the file in `$EDITOR`, with the first changed line when available
+- wheel: scroll hovered panel
+- click or drag on a panel scrollbar: jump/scroll in that panel
+- left/right click in `settings`: change the clicked setting directly
+- hover on diff stats: show `click to open path:line` in the status line
+
 ## Tmux
 
 When `gitws` runs inside tmux:
@@ -197,11 +209,13 @@ If the primary journal path does not exist, `gitws` tries fallbacks for non-feat
 - repositories are sorted with dirty repos first, then by relative path
 - detached HEAD is displayed as `detached`
 - repos that fail `git status` are skipped during scanning
-- panels switch between multi-column and stacked layouts depending on terminal width
+- panels switch between 2-column and stacked layouts depending on terminal width
 - non-list panels use wrapped text instead of hard truncation
 - scroll offsets are remembered per selected repo for description, journal, and diff panels
 - focused panel is also remembered per selected repo
 - scrollable panels display a visual scrollbar
+- the journal panel renders full markdown content, not a truncated plain-text preview
+- the diff panel shows stats only, using `git diff --numstat` for staged and unstaged changes
 - `J` shows an error if the computed journal file does not exist in the selected repo
 - the detail panel shows the journal source (`primary`, `fallback-*`, or `primary-missing`)
 - the detail panel shows the computed slug and exact resolved filename explicitly

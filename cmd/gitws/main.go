@@ -23,7 +23,7 @@ func main() {
 	tmux := app.LoadTmuxConfigForModel()
 	warnings := app.DependencyWarnings(tmux)
 	m := app.NewModel(cli.Root, warnings, tmux)
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		log.Println(err)
 		os.Exit(1)
