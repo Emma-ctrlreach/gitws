@@ -578,7 +578,7 @@ func diffStatLines(repo git.RepoStatus) []string {
 		if entry.Line > 0 {
 			lineHint = fmt.Sprintf(":%d", entry.Line)
 		}
-		lines = append(lines, fmt.Sprintf("+%s -%s  %s%s", entry.Added, entry.Deleted, entry.Path, lineHint))
+		lines = append(lines, fmt.Sprintf("+%s -%s  %s%s", entry.Added, entry.Deleted, entry.DisplayPath, lineHint))
 	}
 	return lines
 }
@@ -856,11 +856,25 @@ func (m model) handleDiffClick(x int, y int) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if entry.OpenPath == "" {
-		m.err = fmt.Errorf("cannot open deleted or unresolved file: %s", entry.Path)
-		return m, nil
+		if strings.TrimSpace(entry.HistoryPath) == "" {
+			m.err = fmt.Errorf("cannot open deleted or unresolved file: %s", entry.Path)
+			return m, nil
+		}
+		cmd, err := openHistoricalFileCmd(repo.Path, entry.HistoryPath, entry.Line, m.tmux)
+		if err != nil {
+			m.err = err
+			return m, nil
+		}
+		return m, runExternalCmd(cmd)
 	}
 	fullPath := filepath.Join(repo.Path, entry.OpenPath)
 	if _, err := os.Stat(fullPath); err != nil {
+		if strings.TrimSpace(entry.HistoryPath) != "" {
+			cmd, cmdErr := openHistoricalFileCmd(repo.Path, entry.HistoryPath, entry.Line, m.tmux)
+			if cmdErr == nil {
+				return m, runExternalCmd(cmd)
+			}
+		}
 		m.err = fmt.Errorf("file not available in working tree: %s", entry.OpenPath)
 		return m, nil
 	}
@@ -920,6 +934,12 @@ func (m model) mouseHint(panel string, x int, y int) string {
 		}
 		return fmt.Sprintf("click to open %s", entry.OpenPath)
 	}
+	if panel == "description" {
+		return "enter lazygit  o opencode  J feature journal"
+	}
+	if panel == "journal" {
+		return "scroll markdown preview  J open full journal"
+	}
 	if panel == "list" {
 		return "double-click to open lazygit"
 	}
@@ -971,6 +991,32 @@ func openFileInEditorCmd(repoPath string, relativePath string, line int, tmux tm
 	return cmd, nil
 }
 
+func openHistoricalFileCmd(repoPath string, historyPath string, line int, tmux tmuxConfig) (*exec.Cmd, error) {
+	editor := strings.TrimSpace(os.Getenv("EDITOR"))
+	if editor == "" {
+		editor = "vi"
+	}
+	contentCmd := exec.Command("git", "-C", repoPath, "show", "HEAD:"+historyPath)
+	content, err := contentCmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("read historical file %s: %w", historyPath, err)
+	}
+	tmp, err := os.CreateTemp("", "gitws-history-*.tmp")
+	if err != nil {
+		return nil, fmt.Errorf("create temp file for %s: %w", historyPath, err)
+	}
+	defer tmp.Close()
+	if _, err := tmp.Write(content); err != nil {
+		return nil, fmt.Errorf("write temp file for %s: %w", historyPath, err)
+	}
+	tmpPath := tmp.Name()
+	if tmux.usable() {
+		return tmux.command(repoPath, editorCommand(editor, tmpPath, line))
+	}
+	args := editorArgs(editor, tmpPath, line)
+	return exec.Command(editor, args...), nil
+}
+
 func editorArgs(editor string, path string, line int) []string {
 	name := filepath.Base(editor)
 	switch name {
@@ -996,12 +1042,17 @@ func editorArgs(editor string, path string, line int) []string {
 
 func editorCommand(editor string, relativePath string, line int) string {
 	args := editorArgs(editor, relativePath, line)
+	quoted := quoteArgs(args, editor)
+	return "exec " + strings.Join(quoted, " ")
+}
+
+func quoteArgs(args []string, editor string) []string {
 	quoted := make([]string, 0, len(args)+1)
 	quoted = append(quoted, shellQuote(editor))
 	for _, arg := range args {
 		quoted = append(quoted, shellQuote(arg))
 	}
-	return "exec " + strings.Join(quoted, " ")
+	return quoted
 }
 
 func shellQuote(value string) string {

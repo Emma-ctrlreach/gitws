@@ -142,10 +142,12 @@ Mouse:
 - left click in repo list: select repo
 - double-click in repo list: open `lazygit`
 - left click on a diff stats line: open the file in `$EDITOR`, with the first changed line when available
+- deleted files open from a temporary `git show HEAD:path` snapshot when possible
 - wheel: scroll hovered panel
 - click or drag on a panel scrollbar: jump/scroll in that panel
 - left/right click in `settings`: change the clicked setting directly
 - hover on diff stats: show `click to open path:line` in the status line
+- hover on description/journal: show context hints in the status line
 
 ## Tmux
 

@@ -25,12 +25,14 @@ type RepoStatus struct {
 }
 
 type DiffStatEntry struct {
-	Section  string
-	Added    string
-	Deleted  string
-	Path     string
-	OpenPath string
-	Line     int
+	Section     string
+	Added       string
+	Deleted     string
+	Path        string
+	DisplayPath string
+	OpenPath    string
+	HistoryPath string
+	Line        int
 }
 
 func Scan(root string) ([]RepoStatus, error) {
@@ -148,15 +150,32 @@ func parseDiffStatEntries(section string, text string, lineHints map[string]int)
 			continue
 		}
 		entries = append(entries, DiffStatEntry{
-			Section:  section,
-			Added:    parts[0],
-			Deleted:  parts[1],
-			Path:     parts[2],
-			OpenPath: resolveDiffOpenPath(parts[2]),
-			Line:     lineHints[parts[2]],
+			Section:     section,
+			Added:       parts[0],
+			Deleted:     parts[1],
+			Path:        parts[2],
+			DisplayPath: resolveDiffDisplayPath(parts[2]),
+			OpenPath:    resolveDiffOpenPath(parts[2]),
+			HistoryPath: resolveDiffHistoryPath(parts[2]),
+			Line:        lineHints[parts[2]],
 		})
 	}
 	return entries
+}
+
+func resolveDiffDisplayPath(path string) string {
+	openPath := resolveDiffOpenPath(path)
+	historyPath := resolveDiffHistoryPath(path)
+	if openPath != "" && historyPath != "" && openPath != historyPath {
+		return historyPath + " -> " + openPath
+	}
+	if openPath != "" {
+		return openPath
+	}
+	if historyPath != "" {
+		return historyPath
+	}
+	return path
 }
 
 func resolveDiffOpenPath(path string) string {
@@ -174,6 +193,25 @@ func resolveDiffOpenPath(path string) string {
 			return prefix + middle + suffix
 		}
 		return right
+	}
+	return path
+}
+
+func resolveDiffHistoryPath(path string) string {
+	if strings.Contains(path, " => ") {
+		left, _, found := strings.Cut(path, " => ")
+		if !found {
+			return path
+		}
+		leftBrace := strings.LastIndex(left, "{")
+		rightBrace := strings.LastIndex(path, "}")
+		if leftBrace >= 0 && rightBrace >= 0 {
+			prefix := left[:leftBrace]
+			middle := left[leftBrace+1:]
+			suffix := path[rightBrace+1:]
+			return prefix + middle + suffix
+		}
+		return left
 	}
 	return path
 }
