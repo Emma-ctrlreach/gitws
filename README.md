@@ -1,6 +1,6 @@
 # gitws
 
-`gitws` is a small Bubble Tea TUI to scan a workspace root, list Git repositories, and jump into `lazygit` for the selected repo.
+`gitws` is a Bubble Tea workspace navigator for Git repos. It scans a root directory, lists nested repos and submodules, shows branch and change state, previews code diffs and feature journals, and opens the selected repo in `lazygit`, `opencode`, or a journal editor with tmux-aware integration.
 
 ## Features
 
@@ -20,7 +20,6 @@
 - uses globally installed `lazygit` and `opencode` from `PATH`
 - can be used globally from any current working directory
 - supports `--root /path` or `gitws /path` for ad-hoc scans
-- inside tmux, can open tools in popup or split mode
 - inside tmux, can open tools in `popup`, `split`, or `window` mode
 - supports tmux sizing/position config via environment variables
 - persists tmux settings in `~/.config/gitws/config.json`
@@ -176,7 +175,12 @@ Example:
 feat/bm-yt -> JOURNAL_bm-yt.md
 ```
 
-The computed slug is displayed in the detail panel.
+The detail panel displays:
+- the computed slug
+- the resolved slug
+- the exact resolved journal filename
+- whether resolution came from the primary path or a fallback
+
 If the primary journal path does not exist, `gitws` tries fallbacks for non-feature branches:
 - suffix slug after the first branch segment
 - full normalized branch slug
@@ -190,7 +194,8 @@ If the primary journal path does not exist, `gitws` tries fallbacks for non-feat
 - repos that fail `git status` are skipped during scanning
 - the detail panel switches between side-by-side and stacked layout depending on terminal width
 - `J` shows an error if the computed journal file does not exist in the selected repo
-- the detail panel shows the computed journal slug explicitly
+- the detail panel shows the journal source (`primary`, `fallback-*`, or `primary-missing`)
+- the detail panel shows the computed slug and exact resolved filename explicitly
 - `lazygit` and `opencode` must be installed globally and available in `PATH`
 - inside tmux, `enter`/`l` opens lazygit using the current tmux mode (`popup`, `split`, or `window`)
 - outside tmux, `enter`/`l` falls back to opening lazygit in the current terminal session
