@@ -518,38 +518,33 @@ func (m model) renderDescriptionPanel(width, height int) string {
 		return panelStyle.Width(width).Height(height).Render(mutedStyle.Render("No selection"))
 	}
 
-	state := cleanStyle.Render("clean")
+	stateText := "clean"
 	if repo.Dirty {
-		state = dirtyStyle.Render(fmt.Sprintf("dirty (%d files)", repo.ModifiedCount))
+		stateText = fmt.Sprintf("dirty (%d files)", repo.ModifiedCount)
 	}
 
 	journal := resolveJournalPathForRepo(*repo)
-	journalState := mutedStyle.Render("missing")
-	journalSource := mutedStyle.Render(journal.Source)
-	if strings.HasPrefix(journal.Source, "primary") {
-		journalSource = cleanStyle.Render(journal.Source)
-	} else if strings.HasPrefix(journal.Source, "fallback") {
-		journalSource = dirtyStyle.Render(journal.Source)
-	}
+	journalState := "missing"
+	journalSource := journal.Source
 	if _, err := os.Stat(journal.Path); err == nil {
-		journalState = cleanStyle.Render("present")
+		journalState = "present"
 	}
 
 	lines := []string{
 		repo.Name,
-		fmt.Sprintf("%s %s", labelStyle.Render("Branch:"), branchStyle.Render(repo.Branch)),
-		fmt.Sprintf("%s %s", labelStyle.Render("Status:"), state),
-		fmt.Sprintf("%s +%d/-%d", labelStyle.Render("Ahead/Behind:"), repo.Ahead, repo.Behind),
-		fmt.Sprintf("%s %s", labelStyle.Render("Path:"), repo.Path),
-		fmt.Sprintf("%s %s", labelStyle.Render("Relative:"), repo.RelPath),
-		fmt.Sprintf("%s %s", labelStyle.Render("Journal:"), journalState),
-		fmt.Sprintf("%s %s", labelStyle.Render("Journal source:"), journalSource),
-		fmt.Sprintf("%s %s", labelStyle.Render("Journal slug:"), journal.ComputedSlug),
-		fmt.Sprintf("%s %s", labelStyle.Render("Resolved slug:"), journal.ResolvedSlug),
-		fmt.Sprintf("%s %s", labelStyle.Render("Journal file:"), journal.FileName),
-		fmt.Sprintf("%s %s", labelStyle.Render("Journal path:"), journal.Path),
+		fmt.Sprintf("Branch: %s", repo.Branch),
+		fmt.Sprintf("Status: %s", stateText),
+		fmt.Sprintf("Ahead/Behind: +%d/-%d", repo.Ahead, repo.Behind),
+		fmt.Sprintf("Path: %s", repo.Path),
+		fmt.Sprintf("Relative: %s", repo.RelPath),
+		fmt.Sprintf("Journal: %s", journalState),
+		fmt.Sprintf("Journal source: %s", journalSource),
+		fmt.Sprintf("Journal slug: %s", journal.ComputedSlug),
+		fmt.Sprintf("Resolved slug: %s", journal.ResolvedSlug),
+		fmt.Sprintf("Journal file: %s", journal.FileName),
+		fmt.Sprintf("Journal path: %s", journal.Path),
 		"",
-		labelStyle.Render("Actions"),
+		"Actions",
 		"enter/l  open lazygit",
 		"o        open opencode",
 		"J        open resolved feature journal",
@@ -568,25 +563,20 @@ func (m model) renderJournalPanel(width, height int) string {
 	}
 
 	journal := resolveJournalPathForRepo(*repo)
-	journalState := mutedStyle.Render("missing")
+	journalState := "missing"
 	journalPreview := mutedStyle.Render("Journal preview unavailable")
-	journalSource := mutedStyle.Render(journal.Source)
-	if strings.HasPrefix(journal.Source, "primary") {
-		journalSource = cleanStyle.Render(journal.Source)
-	} else if strings.HasPrefix(journal.Source, "fallback") {
-		journalSource = dirtyStyle.Render(journal.Source)
-	}
+	journalSource := journal.Source
 	if _, err := os.Stat(journal.Path); err == nil {
-		journalState = cleanStyle.Render("present")
+		journalState = "present"
 		journalPreview = readJournalPreview(journal.Path, max(8, height-10), max(20, width-6))
 	}
 
 	lines := []string{
-		fmt.Sprintf("%s %s", labelStyle.Render("State:"), journalState),
-		fmt.Sprintf("%s %s", labelStyle.Render("Source:"), journalSource),
-		fmt.Sprintf("%s %s", labelStyle.Render("Slug:"), journal.ComputedSlug),
-		fmt.Sprintf("%s %s", labelStyle.Render("Resolved:"), journal.ResolvedSlug),
-		fmt.Sprintf("%s %s", labelStyle.Render("File:"), journal.FileName),
+		fmt.Sprintf("State: %s", journalState),
+		fmt.Sprintf("Source: %s", journalSource),
+		fmt.Sprintf("Slug: %s", journal.ComputedSlug),
+		fmt.Sprintf("Resolved: %s", journal.ResolvedSlug),
+		fmt.Sprintf("File: %s", journal.FileName),
 		"",
 		journalPreview,
 	}
