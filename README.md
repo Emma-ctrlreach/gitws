@@ -14,6 +14,7 @@
 - open `lazygit` with `enter` or `l`
 - open `opencode` with `o`
 - show a detail panel for the selected repo
+- show a 4-panel layout: list, description, journal, diff
 - preview code diff in the detail panel
 - preview `.claude/features/JOURNAL_<slug>.md` in the detail panel
 - open `.claude/features/JOURNAL_<slug>.md` with `J`
@@ -118,12 +119,16 @@ make install
 
 ## Controls
 
-- `j` or arrow down: move selection down
-- `k` or arrow up: move selection up
+- `tab`: cycle focused panel
+- `shift+tab`: cycle focused panel backwards
+- `j` or arrow down: move selection or scroll focused panel
+- `k` or arrow up: move selection or scroll focused panel
+- `pgdown` / `ctrl+d`: scroll focused panel down faster
+- `pgup` / `ctrl+u`: scroll focused panel up faster
 - `/`: start filtering
 - `enter` or `l`: open `lazygit` in selected repo
 - `o`: open `opencode` for selected repo
-- `J`: open `.claude/Journal-feature.md` for selected repo
+- `J`: open resolved feature journal for selected repo
 - `s`: open/close Settings panel
 - `p`: toggle tmux mode between `popup`, `split`, and `window`
 - `d`: toggle dirty-only mode
@@ -192,7 +197,9 @@ If the primary journal path does not exist, `gitws` tries fallbacks for non-feat
 - repositories are sorted with dirty repos first, then by relative path
 - detached HEAD is displayed as `detached`
 - repos that fail `git status` are skipped during scanning
-- the detail panel switches between side-by-side and stacked layout depending on terminal width
+- panels switch between multi-column and stacked layouts depending on terminal width
+- non-list panels use wrapped text instead of hard truncation
+- scroll offsets are remembered per selected repo for description, journal, and diff panels
 - `J` shows an error if the computed journal file does not exist in the selected repo
 - the detail panel shows the journal source (`primary`, `fallback-*`, or `primary-missing`)
 - the detail panel shows the computed slug and exact resolved filename explicitly
