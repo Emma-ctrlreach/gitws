@@ -454,10 +454,9 @@ func (m model) renderContent(height int) string {
 	if m.width >= 140 {
 		leftWidth := max(42, m.width/2)
 		rightWidth := max(34, m.width-leftWidth-1)
-		listHeight := max(7, height/2)
-		descriptionHeight := max(6, height-listHeight)
-		journalHeight := max(7, height/2)
-		diffHeight := max(6, height-journalHeight)
+		listHeight := max(7, height/3)
+		descriptionHeight := max(6, height/3)
+		diffHeight := max(6, height-listHeight-descriptionHeight)
 		descriptionPanel := m.renderDescriptionPanel(leftWidth, descriptionHeight)
 		if m.settingsOpen {
 			descriptionPanel = m.renderSettingsPanel(leftWidth, descriptionHeight)
@@ -466,16 +465,12 @@ func (m model) renderContent(height int) string {
 			lipgloss.Left,
 			m.renderListPanel(leftWidth, listHeight),
 			descriptionPanel,
-		)
-		rightColumn := lipgloss.JoinVertical(
-			lipgloss.Left,
-			m.renderJournalPanel(rightWidth, journalHeight),
-			m.renderDiffPanel(rightWidth, diffHeight),
+			m.renderDiffPanel(leftWidth, diffHeight),
 		)
 		return lipgloss.JoinHorizontal(
 			lipgloss.Top,
 			leftColumn,
-			rightColumn,
+			m.renderJournalPanel(rightWidth, height),
 		)
 	}
 
@@ -717,18 +712,17 @@ func (m model) panelRects() map[string]panelRect {
 	if m.width >= 140 {
 		leftWidth := max(42, m.width/2)
 		rightWidth := max(34, m.width-leftWidth-1)
-		listHeight := max(7, height/2)
-		descriptionHeight := max(6, height-listHeight)
-		journalHeight := max(7, height/2)
-		diffHeight := max(6, height-journalHeight)
+		listHeight := max(7, height/3)
+		descriptionHeight := max(6, height/3)
+		diffHeight := max(6, height-listHeight-descriptionHeight)
 		panels["list"] = panelRect{0, top, leftWidth, listHeight}
 		leftDetail := "description"
 		if m.settingsOpen {
 			leftDetail = "settings"
 		}
 		panels[leftDetail] = panelRect{0, top + listHeight, leftWidth, descriptionHeight}
-		panels["journal"] = panelRect{leftWidth, top, rightWidth, journalHeight}
-		panels["diff"] = panelRect{leftWidth, top + journalHeight, rightWidth, diffHeight}
+		panels["diff"] = panelRect{0, top + listHeight + descriptionHeight, leftWidth, diffHeight}
+		panels["journal"] = panelRect{leftWidth, top, rightWidth, height}
 		return panels
 	}
 
